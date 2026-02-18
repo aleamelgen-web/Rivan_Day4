@@ -61,7 +61,7 @@ Deploy the following VMs
 |           |            |              |              |               |
 | NetOps-PH | VMNet1     | VMNet2       | VMNet3       | Bridged (Rep) |
 |           |            |              |              |               |
-| BLDG-PH   | VMNet3     |              |              |               |
+| BLDG-PH   | VMNet3     | VMNet2       |              |               |
 |           |            |              |              |               |
 | BLDG-JP-1 | VMNet4     |              |              |               |
 |           |            |              |              |               |
@@ -161,9 +161,19 @@ wr
 ~~~
 !@BLDG-PH
 sudo su
-ifconfig eth0 11.11.11.111 netmask 255.255.255.224 up
+ifconfig eth0 11.11.11.100 netmask 255.255.255.224 up
+ifconfig eth1 192.168.102.100 netmask 255.255.255.0 up
 route add default gw 11.11.11.113
 ping 11.11.11.113
+~~~
+
+Create a user account:
+~~~
+!@BLDG-PH-1
+adduser admin
+
+> pass
+> pass
 ~~~
 
 <br>
@@ -276,11 +286,11 @@ ip route add 0.0.0.0/0 via 11.11.11.113 dev ens224
 
 ### Jobs of a firewall
 
-1. Traffic Filtering (ACLs, Policy Based Rules)
-2. Transport Security (VPN, DMVPN, ZTNA)
-3. Threat Prevention (NGFW, IPS, Proxy)
-4. Network Segmentation/Isolation (INSIDE, OUTSIDE, DMZ)
-5. Monitoring, Logging, and Alerts
+1. &nbsp; 
+2. &nbsp; 
+3. &nbsp; 
+4. &nbsp; 
+5. &nbsp; 
 
 
 <br>
@@ -841,7 +851,8 @@ conf t
   ip nat inside
  !
  ip access-list extended NAT
-  permit ip any any
+  deny ip 11.11.11.96 0.0.0.31  21.21.21.208 0.0.0.15
+  deny ip 11.11.11.96 0.0.0.31  22.22.22.192 0.0.0.63
   exit
  !
  ip nat inside source list NAT int g1 overload
@@ -905,7 +916,7 @@ conf t
  !
  !
  ip access-list extended NAT-POLICY
-  permit ip any any
+  permit ip 10.#$34T#.0.0  0.0.255.255  any
   exit
  !
  !
@@ -925,6 +936,7 @@ conf t
  router ospf 1
   router-id #$34T#.0.0.1
   network 10.#$34T#.#$34T#.0 0.0.0.255 area 0
+  network #$34T#.0.0.1       0.0.0.0   area 0
   default-information originate always
   end
 ~~~
@@ -1257,20 +1269,6 @@ conf t
 ## ZBF Security Zones
 
 ~~~
-!@BLDG-JP-1
-sudo su
-ifconfig eth0 208.8.8.211 netmask 255.255.255.0 up
-route add default gw 208.8.8.11
-ping 208.8.8.11
-~~~
-
-
-<br>
-
-
-Create a user account on __BLDG-JP-1__
-
-~~~
 !@UTM-PH
 clear ip nat trans *
 clear ip nat trans *
@@ -1288,6 +1286,19 @@ conf t
 <br>
 
 
+~~~
+!@BLDG-JP-1
+sudo su
+ifconfig eth0 208.8.8.211 netmask 255.255.255.0 up
+route add default gw 208.8.8.11
+ping 208.8.8.11
+~~~
+
+
+<br>
+
+
+Create a user account on __BLDG-JP-1__
 ~~~
 !@BLDG-JP-1
 sudo su
@@ -1373,6 +1384,7 @@ conf t
 ~~~
 !@EDGE-#$34T#
 conf t
+ no ip access-list extended NAT-POLICY
  ip access-list extended NAT-POLICY
   deny ip 10.#$34T#.0.0 0.0.255.255 10.11.0.0 0.0.255.255
   deny ip 10.#$34T#.0.0 0.0.255.255 10.12.0.0 0.0.255.255
@@ -1512,18 +1524,36 @@ conf t
 	   - IP Security end entity
 
 
-<br>
-<br>
-
+&nbsp; 
 ---
 &nbsp; 
 
 
-## CA Generation (OPENSSL)
+## Certificates via OPENSSL
+
+__IF USING TINYCORE FOR CA GENERATION__
+~~~
+!@BLDG-PH
+mkdir certs; cd certs
+~~~
+
+<br>
 
 ~~~
-!@Linux
-mkdir /cert ; cd /cert
+!@BLDG-PH
+vi /etc/resolve.conf
+
+
+nameserver 8.8.8.8
+~~~
+
+<br>
+
+EXIT OUT OF SUDO
+~~~
+!@BLDG-PH
+tce-load -wi nano
+echo nano.tcz >> /mnt/sda1/tce/onboot.lst
 ~~~
 
 <br>
@@ -1911,6 +1941,11 @@ conf t
   rsakeypair RIVANPH-KEY
   exit
  !
+ 
+ 
+ crypto pki authenticate RIVAN-PH
+ 
+ 
  crypto pki enroll RIVAN-PH
  
 ~~~
@@ -1925,12 +1960,28 @@ conf t
 
 <br>
 
+
+~~~
+!@NetOps
+openssl x509 \
+  -req \
+  -in utmph.csr \
+  -CA subca.crt \
+  -CAkey subca.key \
+  -CAcreateserial \
+  -out utmph.crt \
+  -days 30 \
+  -extensions v3_leaf_req \
+  -extfile utmph.cnf
+~~~
+
+
+<br>
+
+
 ~~~
 !@UTM-PH
 conf t
- crypto pki authenticate RIVAN-PH
-
-
  crypto pki import RIVAN-PH certificate
  
 ~~~
@@ -1980,7 +2031,43 @@ IP.1    = 208.8.8.12
 ~~~
 
 
+~~~
+!@UTM-JP
+conf t
+ crypto key generate rsa modulus 2048 label RIVANJP-KEY exportable
+ end
+~~~
+
 <br>
+
+~~~
+!@UTM-JP
+conf t
+ crypto pki trustpoint RIVAN-JP
+  enrollment terminal
+  revocation-check crl none
+  rsakeypair RIVANJP-KEY
+  exit
+ !
+ 
+ 
+ crypto pki authenticate RIVAN-JP
+ 
+ 
+ crypto pki enroll RIVAN-JP
+ 
+~~~
+
+<br>
+
+
+-----BEGIN CERTIFICATE REQUEST-----
+
+-----END CERTIFICATE REQUEST-----
+
+
+<br>
+
 
 ~~~
 !@NetOps
@@ -1995,6 +2082,18 @@ openssl x509 \
   -extensions v3_leaf_req \
   -extfile utmjp.cnf
 ~~~
+
+
+<br>
+
+
+~~~
+!@UTM-JP
+conf t
+ crypto pki import RIVAN-JP certificate
+ 
+~~~
+
 
 <br>
 <br>
